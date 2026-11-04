@@ -340,6 +340,94 @@ def priority_score(task):
     return quadrant, round(imp * 0.6 + urgency * 0.4, 2), days
 
 
+# ==========================================
+# 3. 가중치 점수 모델
+# ==========================================
+
+DEFAULT_WEIGHTS = {
+    "importance": 0.35,
+    "urgency": 0.30,
+    "impact": 0.25,
+    "ease": 0.10
+}
+
+
+def weighted_priority_score(task):
+
+    # 기존 아이젠하워 매트릭스 활용
+    quadrant, _, days = priority_score(task)
+
+    def safe_score(value, default=3):
+        try:
+            return max(1, min(5, int(value)))
+        except (ValueError, TypeError):
+            return default
+
+    # 중요도
+    importance = safe_score(task.get("importance"))
+
+    # 기존 마감일 기준 긴급도
+    if days is None:
+        urgency = 1
+    elif days <= 1:
+        urgency = 5
+    elif days <= 3:
+        urgency = 4
+    elif days <= 7:
+        urgency = 3
+    else:
+        urgency = 1
+
+    # 지연 영향도
+    impact = safe_score(task.get("impact"))
+
+    # 예상 작업 시간
+    try:
+        hours = float(task.get("estimated_hours"))
+        if hours <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        hours = None
+
+    # 처리 용이성
+    if task.get("ease") is not None and str(task.get("ease")).strip():
+        ease = safe_score(task.get("ease"))
+    elif hours is None:
+        ease = 3
+    elif hours <= 1:
+        ease = 5
+    elif hours <= 2:
+        ease = 4
+    elif hours <= 4:
+        ease = 3
+    elif hours <= 8:
+        ease = 2
+    else:
+        ease = 1
+
+    weights = st.session_state.get(
+        "priority_weights",
+        DEFAULT_WEIGHTS
+    )
+
+    score = (
+        importance * weights["importance"]
+        + urgency * weights["urgency"]
+        + impact * weights["impact"]
+        + ease * weights["ease"]
+    ) * 20
+
+    return {
+        "quadrant": quadrant,
+        "score": round(score, 1),
+        "days_left": days,
+        "importance": importance,
+        "urgency": urgency,
+        "impact": impact,
+        "ease": ease
+    }
+
+
 def ics_events(events):
     def esc(s):
         return str(s).replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
