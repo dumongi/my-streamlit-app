@@ -809,86 +809,539 @@ if selected_page == PAGES[2]:
 
 
 if selected_page == PAGES[3]:
+
     st.subheader("업무 우선순위 분석")
-    st.caption("회의록에서 할 일을 추출하고 중요도를 직접 조정하세요. 마감일이 없는 업무는 긴급하다고 추정하지 않습니다.")
-    meeting_date=st.date_input("회의 기준일",value=date.today(),key="task_meeting_date")
-    if st.button("✨ 회의록에서 업무 자동 추출",type="primary"):
+
+    st.caption(
+        "회의록에서 업무를 추출하고 "
+        "4가지 가중치 기준으로 우선순위를 추천합니다."
+    )
+
+    st.info(
+        "평가 기준: 중요도 35% · 긴급도 30% · "
+        "지연 영향도 25% · 처리 용이성 10%"
+    )
+
+    # =====================================
+    # 1. 회의록에서 업무 자동 추출
+    # =====================================
+
+    meeting_date = st.date_input(
+        "회의 기준일",
+        value=date.today(),
+        key="task_meeting_date"
+    )
+
+    if st.button(
+        "✨ 회의록에서 업무 자동 추출",
+        type="primary"
+    ):
         if not st.session_state.document:
-            st.warning("먼저 AI 비서 탭에서 회의록을 업로드해주세요.")
+            st.warning(
+                "먼저 AI 비서 탭에서 회의록을 업로드해주세요."
+            )
         else:
             try:
-                with st.spinner("담당자·업무·기한을 추출하고 있습니다..."):
-                    st.session_state.tasks=extract_tasks(st.session_state.document,meeting_date)
+                with st.spinner(
+                    "담당자·업무·기한을 추출하고 있습니다..."
+                ):
+                    extracted = extract_tasks(
+                        st.session_state.document,
+                        meeting_date
+                    )
+
+                    # 새로운 평가 항목 기본값
+                    for task in extracted:
+                        task.setdefault("impact", 3)
+                        task.setdefault("estimated_hours", 2.0)
+
+                    st.session_state.tasks = extracted
+
+                st.success("업무 추출이 완료되었습니다.")
+
             except Exception as exc:
                 st.error(f"업무 추출 실패: {exc}")
+
+    # =====================================
+    # 2. 업무 데이터 확인
+    # =====================================
+
     if st.session_state.tasks:
-        tasks=st.session_state.tasks
-        missing=sum(not str(x.get("due") or "").strip() for x in tasks)
-        scored=[(t,*priority_score(t)) for t in tasks]
-        top=sorted(scored,key=lambda x:x[2],reverse=True)
-        high=sum(q=="긴급·중요" for _,q,_,_ in scored)
+
+        tasks = st.session_state.tasks
+
+        # 기존 데이터에도 새 항목 추가
+        for task in tasks:
+            task.setdefault("impact", 3)
+            task.setdefault("estimated_hours", 2.0)
+
+        # =================================
+        # 3. 가중치 점수 계산
+        # =================================
+
+        scored = []
+
+        for task in tasks:
+            result = weighted_priority_score(task)
+
+            scored.append({
+                **task,
+                **result
+            })
+
+        # 점수 높은 순으로 정렬
+        top = sorted(
+            scored,
+            key=lambda x: x["score"],
+            reverse=True
+        )
+
+        missing = sum(
+            not str(t.get("due") or "").strip()
+            for t in tasks
+        )
+
+        high = sum(
+            t["quadrant"] == "긴급·중요"
+            for t in scored
+        )
+
+        owners = len({
+            str(t.get("owner", ""))
+            for t in tasks
+            if t.get("owner")
+        })
+
+        # =================================
+        # 4. 한눈에 보는 업무
+        # =================================
+
         st.markdown("#### 한눈에 보는 내 업무")
-        metric_cols=st.columns(4)
-        for col,num,label in zip(metric_cols,[len(tasks),high,missing,len({str(t.get('owner','')) for t in tasks if t.get('owner')})],["추출 업무","긴급·중요","마감일 미확인","담당자 수"]):
+
+        metric_cols = st.columns(4)
+
+        metric_values = [
+            len(tasks),
+            high,
+            missing,
+            owners
+        ]
+
+        metric_labels = [
+            "추출 업무",
+            "긴급·중요",
+            "마감일 미확인",
+            "담당자 수"
+        ]
+
+        for col, num, label in zip(
+            metric_cols,
+            metric_values,
+            metric_labels
+        ):
             with col:
-                st.markdown(f'<div class="metric-shell"><div class="big">{num}</div><div class="small">{label}</div></div>',unsafe_allow_html=True)
-        st.markdown("#### 🏅 먼저 확인할 업무 TOP 3")
-        for rank,(t,q,score,days) in enumerate(top[:3],start=1):
+                st.markdown(
+                    f'<div class="metric-shell">'
+                    f'<div class="big">{num}</div>'
+                    f'<div class="small">{label}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+        # =================================
+        # 5. TOP 3 업무 추천
+        # =================================
+
+        st.markdown(
+            "#### 🏅 먼저 확인할 업무 TOP 3"
+        )
+
+        for rank, task in enumerate(
+            top[:3],
+            start=1
+        ):
             with st.container(border=True):
-                a,b=st.columns([5,1])
+
+                a, b = st.columns([5, 1])
+
                 with a:
-                    st.markdown(f"**{rank}. {t.get('task','')}**")
-                    st.caption(f"담당: {t.get('owner','확인 필요')}  ·  기한: {t.get('due') or '확인 필요'}  ·  분류: {q}")
+                    st.markdown(
+                        f"**{rank}. "
+                        f"{task.get('task', '')}**"
+                    )
+
+                    st.caption(
+                        f"담당: {task.get('owner', '확인 필요')}"
+                        f" · 기한: {task.get('due') or '확인 필요'}"
+                        f" · 분류: {task['quadrant']}"
+                    )
+
                 with b:
-                    st.metric("우선점수",f"{score:.1f} / 5")
-        st.markdown("#### 🧭 아이젠하워 매트릭스")
-        st.caption("가로: 중요도 · 세로: 긴급도 / 각 사분면의 업무를 카드로 표시합니다.")
-        qs=[("긴급·중요","1사분면 · 즉시 실행","#d64545"),("비긴급·중요","2사분면 · 계획 수립","#2478ba"),("긴급·비중요","3사분면 · 위임 검토","#c27b17"),("비긴급·비중요","4사분면 · 보류 검토","#718096")]
-        for offset in [0,2]:
-            cols=st.columns(2,gap="medium")
-            for col,(q,hint,accent) in zip(cols,qs[offset:offset+2]):
+                    st.metric(
+                        "우선점수",
+                        f"{task['score']:.1f} / 100"
+                    )
+
+        # =================================
+        # 6. 아이젠하워 매트릭스
+        # =================================
+
+        st.markdown(
+            "#### 🧭 아이젠하워 매트릭스"
+        )
+
+        st.caption(
+            "가로: 중요도 · 세로: 긴급도 / "
+            "카드 점수는 4가지 가중치 모델 기준입니다."
+        )
+
+        qs = [
+            (
+                "긴급·중요",
+                "1사분면 · 즉시 실행",
+                "#d64545"
+            ),
+            (
+                "비긴급·중요",
+                "2사분면 · 계획 수립",
+                "#2478ba"
+            ),
+            (
+                "긴급·비중요",
+                "3사분면 · 위임 검토",
+                "#c27b17"
+            ),
+            (
+                "비긴급·비중요",
+                "4사분면 · 보류 검토",
+                "#718096"
+            )
+        ]
+
+        for offset in [0, 2]:
+
+            cols = st.columns(
+                2,
+                gap="medium"
+            )
+
+            for col, (q, hint, accent) in zip(
+                cols,
+                qs[offset:offset + 2]
+            ):
+
                 with col:
-                    subset=[(t,s,d) for t,c,s,d in scored if c==q]
-                    items="".join(
-                        f'<div class="qitem"><strong>{escape(str(t.get("task","")))}</strong><br><small>👤 {escape(str(t.get("owner","확인 필요")))} · 📅 {escape(str(t.get("due") or "미지정"))} · 점수 {s:.1f}</small></div>'
-                        for t,s,d in sorted(subset,key=lambda x:x[1],reverse=True))
-                    if not items: items='<div class="qitem">해당 업무 없음</div>'
-                    st.markdown(f'<div class="qbox" style="border-top:5px solid {accent}"><div class="qhead">{escape(q)} <span style="color:{accent}">({len(subset)})</span></div><div class="qhint">{escape(hint)}</div>{items}</div>',unsafe_allow_html=True)
+
+                    subset = [
+                        task for task in scored
+                        if task["quadrant"] == q
+                    ]
+
+                    subset = sorted(
+                        subset,
+                        key=lambda x: x["score"],
+                        reverse=True
+                    )
+
+                    items = ""
+
+                    for task in subset:
+
+                        task_name = escape(
+                            str(task.get("task", ""))
+                        )
+
+                        owner = escape(
+                            str(
+                                task.get(
+                                    "owner",
+                                    "확인 필요"
+                                )
+                            )
+                        )
+
+                        due = escape(
+                            str(
+                                task.get("due")
+                                or "미지정"
+                            )
+                        )
+
+                        score = task["score"]
+
+                        items += (
+                            '<div class="qitem">'
+                            f'<strong>{task_name}</strong>'
+                            '<br>'
+                            f'<small>👤 {owner}'
+                            f' · 📅 {due}'
+                            f' · 점수 {score:.1f}/100'
+                            '</small>'
+                            '</div>'
+                        )
+
+                    if not items:
+                        items = (
+                            '<div class="qitem">'
+                            '해당 업무 없음'
+                            '</div>'
+                        )
+
+                    st.markdown(
+                        f'<div class="qbox" '
+                        f'style="border-top:5px solid {accent}">'
+                        f'<div class="qhead">'
+                        f'{escape(q)} '
+                        f'<span style="color:{accent}">'
+                        f'({len(subset)})'
+                        f'</span></div>'
+                        f'<div class="qhint">'
+                        f'{escape(hint)}'
+                        f'</div>'
+                        f'{items}'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+
+        # =================================
+        # 7. 업무 정보 수정
+        # =================================
+
         st.markdown("#### ✍️ 업무 정보 수정")
-        st.caption("중요도 1~5와 마감일을 수정하면 우선순위 결과에 반영됩니다. 날짜는 YYYY-MM-DD 형식으로 입력하세요.")
-        f=pd.DataFrame(tasks)
-        for c in ["task","owner","due","importance","evidence"]:
-            if c not in f:f[c]=""
-        edit=st.data_editor(f[["task","owner","due","importance","evidence"]],hide_index=True,use_container_width=True,num_rows="dynamic",key="task_editor",
-           column_config={"task":st.column_config.TextColumn("업무",width="large"),"owner":st.column_config.TextColumn("담당자"),"due":st.column_config.TextColumn("마감일 YYYY-MM-DD"),"importance":st.column_config.NumberColumn("중요도 1~5",min_value=1,max_value=5,step=1),"evidence":st.column_config.TextColumn("원문 근거",width="large")})
-        if st.button("💾 수정사항 반영",use_container_width=True):
-            clean=[]
-            invalid=[]
-            for i,t in enumerate(edit.fillna("").to_dict("records"),1):
-                if not str(t.get("task","")).strip():continue
-                due=str(t.get("due","")).strip()
+
+        st.caption(
+            "중요도, 마감일, 지연 영향도, "
+            "예상 작업 시간을 수정하면 "
+            "우선순위 점수에 반영됩니다."
+        )
+
+        f = pd.DataFrame(tasks)
+
+        columns = [
+            "task",
+            "owner",
+            "due",
+            "importance",
+            "impact",
+            "estimated_hours",
+            "evidence"
+        ]
+
+        for c in columns:
+            if c not in f:
+                f[c] = ""
+
+        edit = st.data_editor(
+            f[columns],
+            hide_index=True,
+            use_container_width=True,
+            num_rows="dynamic",
+            key="task_editor",
+
+            column_config={
+                "task": st.column_config.TextColumn(
+                    "업무",
+                    width="large"
+                ),
+                "owner": st.column_config.TextColumn(
+                    "담당자"
+                ),
+                "due": st.column_config.TextColumn(
+                    "마감일 YYYY-MM-DD"
+                ),
+                "importance": st.column_config.NumberColumn(
+                    "중요도 1~5",
+                    min_value=1,
+                    max_value=5,
+                    step=1
+                ),
+                "impact": st.column_config.NumberColumn(
+                    "지연 영향도 1~5",
+                    min_value=1,
+                    max_value=5,
+                    step=1
+                ),
+                "estimated_hours": st.column_config.NumberColumn(
+                    "예상 작업 시간",
+                    min_value=0.5,
+                    step=0.5
+                ),
+                "evidence": st.column_config.TextColumn(
+                    "원문 근거",
+                    width="large"
+                )
+            }
+        )
+
+        # =================================
+        # 8. 수정사항 저장
+        # =================================
+
+        if st.button(
+            "💾 수정사항 반영",
+            use_container_width=True
+        ):
+
+            clean = []
+            invalid = []
+
+            for i, t in enumerate(
+                edit.fillna("").to_dict("records"),
+                start=1
+            ):
+
+                if not str(
+                    t.get("task", "")
+                ).strip():
+                    continue
+
+                due = str(
+                    t.get("due", "")
+                ).strip()
+
                 if due:
-                    try:date.fromisoformat(due)
-                    except ValueError:invalid.append(i)
-                try:t["importance"]=max(1,min(5,int(t.get("importance") or 3)))
-                except (ValueError,TypeError):t["importance"]=3
+                    try:
+                        date.fromisoformat(due)
+                    except ValueError:
+                        invalid.append(
+                            f"{i}행: 마감일"
+                        )
+
+                # 중요도
+                try:
+                    t["importance"] = max(
+                        1,
+                        min(
+                            5,
+                            int(t.get("importance") or 3)
+                        )
+                    )
+                except (ValueError, TypeError):
+                    t["importance"] = 3
+
+                # 지연 영향도
+                try:
+                    t["impact"] = max(
+                        1,
+                        min(
+                            5,
+                            int(t.get("impact") or 3)
+                        )
+                    )
+                except (ValueError, TypeError):
+                    t["impact"] = 3
+
+                # 예상 작업 시간
+                try:
+                    hours = float(
+                        t.get("estimated_hours")
+                    )
+                    if hours <= 0:
+                        raise ValueError
+                    t["estimated_hours"] = hours
+                except (ValueError, TypeError):
+                    invalid.append(
+                        f"{i}행: 예상 작업 시간"
+                    )
+
                 clean.append(t)
-            if invalid:st.error(f"마감일 형식을 확인하세요. 행 번호: {invalid}")
+
+            if invalid:
+                st.error(
+                    "입력값을 확인해주세요: "
+                    + ", ".join(invalid)
+                )
+
             else:
-                st.session_state.tasks=clean
-                st.success("수정사항을 반영했습니다.")
+                st.session_state.tasks = clean
+
+                st.success(
+                    "수정사항을 반영했습니다."
+                )
+
                 st.rerun()
-        table=[]
-        for t in tasks:
-            q,score,days=priority_score(t)
-            table.append({"업무":t.get("task",""),"담당자":t.get("owner",""),"마감일":t.get("due",""),"중요도":t.get("importance",3),"분류":q,"우선점수":score,"D-day":("D"+str(days) if days is not None else "미지정")})
-        df=pd.DataFrame(table).sort_values("우선점수",ascending=False)
-        with st.expander("📋 우선순위 전체 순위표",expanded=False):
-            st.dataframe(df,hide_index=True,use_container_width=True)
-        st.download_button("⬇️ 업무 현황 CSV 다운로드",df.to_csv(index=False).encode("utf-8-sig"),"aivle_tasks.csv",mime="text/csv")
-        st.caption("점수 = 중요도 × 0.6 + 마감 긴급도 × 0.4 (예시 가중치). 마감일 미지정은 긴급도 1로 임시 계산하므로 우선순위 해석 시 주의하세요.")
+
+        # =================================
+        # 9. 전체 우선순위 순위표
+        # =================================
+
+        table = []
+
+        for task in scored:
+
+            days = task["days_left"]
+
+            if days is None:
+                dday = "미지정"
+            elif days > 0:
+                dday = f"D-{days}"
+            elif days == 0:
+                dday = "D-Day"
+            else:
+                dday = f"D+{abs(days)}"
+
+            table.append({
+                "업무": task.get("task", ""),
+                "담당자": task.get("owner", ""),
+                "마감일": task.get("due", ""),
+                "중요도": task["importance"],
+                "긴급도": task["urgency"],
+                "지연 영향도": task["impact"],
+                "처리 용이성": task["ease"],
+                "예상 작업 시간": task.get(
+                    "estimated_hours",
+                    2.0
+                ),
+                "분류": task["quadrant"],
+                "우선점수": task["score"],
+                "D-day": dday
+            })
+
+        df = pd.DataFrame(table)
+
+        df = df.sort_values(
+            "우선점수",
+            ascending=False
+        )
+
+        with st.expander(
+            "📋 우선순위 전체 순위표",
+            expanded=False
+        ):
+            st.dataframe(
+                df,
+                hide_index=True,
+                use_container_width=True
+            )
+
+        # =================================
+        # 10. CSV 다운로드
+        # =================================
+
+        st.download_button(
+            "⬇️ 업무 현황 CSV 다운로드",
+            data=df.to_csv(
+                index=False
+            ).encode("utf-8-sig"),
+            file_name="aivle_tasks.csv",
+            mime="text/csv"
+        )
+
+        st.caption(
+            "우선순위 점수 = "
+            "(중요도 × 0.35 + 긴급도 × 0.30 + "
+            "지연 영향도 × 0.25 + "
+            "처리 용이성 × 0.10) × 20. "
+            "마감일이 없는 업무는 긴급도 1로 계산합니다."
+        )
+
     else:
-        st.info("회의록 업로드 후 '업무 자동 추출'을 실행하면 업무 카드와 4분면이 나타납니다.")
+        st.info(
+            "회의록 업로드 후 "
+            "'업무 자동 추출'을 실행하면 "
+            "업무 카드와 아이젠하워 매트릭스가 나타납니다."
+        )
+
 
 
 if selected_page == PAGES[4]:
