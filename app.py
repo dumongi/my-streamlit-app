@@ -440,8 +440,10 @@ def sync_task_deadlines(events, tasks, enable_new=False):
             date.fromisoformat(due)
         except ValueError:
             continue
-        quadrant, score, _ = priority_score(task)
-        title = f"[업무 마감] {task.get('task','업무')}"
+        result = weighted_priority_score(task)
+        quadrant = result["quadrant"]
+        score = result["score"]
+        title = f"[업무 마감] {task.get('task') or task.get('title') or '업무'}"
         event = {"id": f"task-{task_id}", "title": title, "date": due,
                  "start": "", "end": "", "source": "업무 마감", "task_id": task_id,
                  "priority": quadrant, "score": score}
